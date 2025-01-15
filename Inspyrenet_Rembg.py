@@ -50,7 +50,7 @@ def add_text_overlay(image, text, position, font_size=32, color="#FFFFFF", font_
         else:
             font = ImageFont.truetype("arial.ttf", font_size)
     except:
-        font = ImageFont.load_default()
+        font = ImageFont.load_default(font_size)
 
     # Convert color if it's a hex string
     if isinstance(color, str):
