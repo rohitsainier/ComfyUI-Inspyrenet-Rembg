@@ -3,6 +3,16 @@ import torch
 import numpy as np
 from transparent_background import Remover
 from tqdm import tqdm
+import os
+
+# List of available fonts - update this based on your font files
+# Get the directory where the script is located
+script_directory = os.path.dirname(os.path.abspath(__file__))
+# Construct the full path to the fonts directory
+fonts_directory = os.path.join(script_directory, "fonts")
+
+AVAILABLE_FONTS = [f.split(".")[0] for f in os.listdir(
+    fonts_directory) if f.endswith(".ttf") or f.endswith(".otf")]
 
 
 def tensor2pil(image):
@@ -41,17 +51,30 @@ def hex_to_rgb(hex_color):
     return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
 
 
-def add_text_overlay(image, text_config, font_path=None):
+def add_text_overlay(image, text_config):
     """Add text overlay to an image using the text configuration."""
     draw = ImageDraw.Draw(image)
 
+    # Construct font paths based on font family for both ttf and otf
+    font_path_ttf = os.path.join(
+        fonts_directory, f"{text_config['font_family']}.ttf")
+    font_path_otf = os.path.join(
+        fonts_directory, f"{text_config['font_family']}.otf")
+
+    # Try loading ttf first, then otf, and fallback to default if both fail
+    if os.path.exists(font_path_ttf):
+        font_path = font_path_ttf
+    elif os.path.exists(font_path_otf):
+        font_path = font_path_otf
+    else:
+        print(
+            f"Error loading font {text_config['font_family']}, using default font")
+        font_path = None
     try:
-        if font_path:
-            font = ImageFont.truetype(font_path, text_config["font_size"])
-        else:
-            font = ImageFont.truetype(
-                text_config["font_family"], text_config["font_size"])
-    except:
+        font = ImageFont.truetype(font_path, text_config["font_size"])
+    except Exception as e:
+        print(
+            f"Error loading font {text_config['font_family']}, using default font: {e}")
         font = ImageFont.load_default(text_config["font_size"])
 
     # Convert color if it's a hex string
@@ -84,8 +107,8 @@ class TextOverlayConfig:
         return {
             "required": {
                 "text_content": ("STRING", {"default": "edit"}),
-                "font_family": (["Inter", "Arial", "Times New Roman", "Helvetica", "Roboto"],),
-                "text_color": ("STRING", {"default": "#FFFFFF"}),  # Hex color
+                "font_family": (AVAILABLE_FONTS,),
+                "text_color": ("STRING", {"default": "#FFFFFF"}),
                 "text_placement": (["foreground", "background", "both"],),
                 "x_position": ("FLOAT", {
                     "default": -12,
@@ -105,12 +128,7 @@ class TextOverlayConfig:
                     "max": 800,
                     "step": 1
                 }),
-                "font_weight": ("INT", {
-                    "default": 800,
-                    "min": 100,
-                    "max": 900,
-                    "step": 100
-                }),
+                "font_weight": (["100", "200", "300", "400", "500", "600", "700", "800", "900"],),
                 "opacity": ("FLOAT", {
                     "default": 1.0,
                     "min": 0.0,
@@ -154,7 +172,6 @@ class TextOverlayBatch:
     def INPUT_TYPES(cls):
         return {
             "required": {
-                # First required text config
                 "text_config_1": ("TEXT_CONFIG",),
             },
             "optional": {
@@ -171,31 +188,13 @@ class TextOverlayBatch:
 
     def batch_text_configs(self, text_config_1, text_config_2=None, text_config_3=None,
                            text_config_4=None, text_config_5=None):
-        """
-        Batches multiple text configurations into a single batch.
-
-        Args:
-            text_config_1: First text configuration (required)
-            text_config_2: Second text configuration (optional)
-            text_config_3: Third text configuration (optional)
-            text_config_4: Fourth text configuration (optional)
-            text_config_5: Fifth text configuration (optional)
-
-        Returns:
-            A tuple containing the batch of text configurations.
-        """
-        # Clear the existing batch
         self.text_configs.clear()
-
-        # Add the required text config
         self.text_configs.append(text_config_1)
 
-        # Add optional text configs if they exist
         for config in [text_config_2, text_config_3, text_config_4, text_config_5]:
             if config is not None:
                 self.text_configs.append(config)
 
-        # Return the batch
         return (self.text_configs,)
 
 
@@ -230,7 +229,6 @@ class InspyrenetRembgAdvanced:
     def remove_background(self, image, threshold, torchscript_jit, output_type, background_mode,
                           background_color="#000000", gradient_color1="#000000", gradient_color2="#FFFFFF",
                           gradient_direction="horizontal", background_image=None, text_config_batch=None):
-
         img_list = []
         mask_list = []
 
@@ -244,11 +242,8 @@ class InspyrenetRembgAdvanced:
                 alpha_mask = np.ones(
                     (original_size[1], original_size[0]), dtype=np.float32)
             else:
-                if (torchscript_jit == "default"):
-                    remover = Remover()
-                else:
-                    remover = Remover(jit=True)
-
+                remover = Remover(
+                    jit=True if torchscript_jit == "on" else False)
                 rgba_output = remover.process(
                     pil_img, type='rgba', threshold=threshold)
                 rgba_array = np.array(rgba_output)
@@ -272,7 +267,6 @@ class InspyrenetRembgAdvanced:
                         new_bg = Image.new(
                             'RGBA', original_size, (0, 0, 0, 255))
 
-                    # Apply background text if configured
                     if text_config_batch:
                         for text_config in text_config_batch:
                             if text_config["text_placement"] in ["background", "both"]:
@@ -281,7 +275,6 @@ class InspyrenetRembgAdvanced:
                     processed_output = Image.alpha_composite(
                         new_bg, rgba_output)
 
-                    # Apply foreground text if configured
                     if text_config_batch:
                         for text_config in text_config_batch:
                             if text_config["text_placement"] in ["foreground", "both"]:
@@ -297,7 +290,6 @@ class InspyrenetRembgAdvanced:
                     processed_output = Image.fromarray(
                         bg_rgba.astype(np.uint8))
 
-                    # Apply background text if configured
                     if text_config_batch:
                         for text_config in text_config_batch:
                             if text_config["text_placement"] in ["background", "both"]:
@@ -306,7 +298,6 @@ class InspyrenetRembgAdvanced:
 
                 else:  # foreground
                     processed_output = rgba_output
-                    # Apply foreground text if configured
                     if text_config_batch:
                         for text_config in text_config_batch:
                             if text_config["text_placement"] in ["foreground", "both"]:
